@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>SMX Web Prototype - Motocross Physics</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            user-select: none;
+        }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 15px 20px;
+            border-radius: 10px;
+            border-left: 5px solid #ff5722;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #ff5722;
+        }
+        .map-buttons {
+            margin-bottom: 12px;
+        }
+        button {
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            margin-right: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        button:hover, button.active {
+            background: #ff5722;
+            border-color: #ff5722;
+        }
+        .controls {
+            font-size: 13px;
+            color: #ccc;
+            line-height: 1.6;
+        }
+        .stats {
+            margin-top: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #4caf50;
+        }
+        #crash-msg {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            font-weight: 900;
+            color: #ff1744;
+            text-shadow: 2px 2px 10px rgba(0,0,0,0.8);
+            display: none;
+            text-align: center;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>SMX Physics 2D</h1>
+    <div class="map-buttons">
+        <button id="btn-0" class="active" onclick="selectMap(0)">1. Supercross</button>
+        <button id="btn-1" onclick="selectMap(1)">2. Motocross</button>
+        <button id="btn-2" onclick="selectMap(2)">3. Freestyle</button>
+    </div>
+    <div class="controls">
+        <b>[Z / Flèche Haut]</b> : Accélérer<br>
+        <b>[S / Flèche Bas]</b> : Freiner / Reculer<br>
+        <b>[Q / Flèche Gauche]</b> : Tirer le guidon (Wheelie / Backflip)<br>
+        <b>[D / Flèche Droite]</b> : Pousser le guidon (Stoppie / Frontflip)<br>
+        <b>[R]</b> : Recommencer
+    </div>
+    <div class="stats">
+        Vitesse : <span id="speed">0</span> km/h | Figures : <span id="tricks">0</span> pts
+    </div>
+</div>
+
+<div id="crash-msg">
+    CHUTE !<br>
+    <span style="font-size: 20px; color: white;">Appuie sur [R] pour te relever</span>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- GESTION DES TOUCHES ---
+const keys = { up: false, down: false, left: false, right: false };
+window.addEventListener('keydown', e => {
+    if (e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'KeyZ') keys.up = true;
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = true;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'KeyQ') keys.left = true;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+    if (e.code === 'KeyR') resetBike();
+});
+window.addEventListener('keyup', e => {
+    if (e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'KeyZ') keys.up = false;
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') keys.down = false;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'KeyQ') keys.left = false;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+});
+
+// --- CONFIGURATION DES 3 MAPS ---
+let currentMap = 0;
+const maps = [
+    {
+        name: "Supercross Stadium",
+        sky: "#0f172a",
+        ground: "#78350f",
+        topSoil: "#b45309",
+        // Fonction mathématique générant un terrain de Supercross (doubles, triples, whoops)
+        getY: (x) => {
+            if (x < 400) return 500;
+            let t = x - 400;
+            // Section de sauts serrés + série de whoops tous les 2500 pixels
+            let mod = t % 3000;
+            if (mod > 2000 && mod < 2700) {
+                // Section de Whoops !
+                return 500 - Math.abs(Math.sin(t * 0.05)) * 35;
+            }
+            return 500 - Math.sin(t * 0.008) * 90 - Math.sin(t * 0.016) * 50;
+        }
+    },
+    {
+        name: "Motocross National",
+        sky: "#38bdf8",
+        ground: "#3f6212",
+        topSoil: "#65a30d",
+        // Grandes collines naturelles et sauts longs
+        getY: (x) => {
+            if (x < 400) return 500;
+            let t = x - 400;
+            return 500 - Math.sin(t * 0.003) * 180 - Math.cos(t * 0.009) * 60 + Math.sin(t * 0.001) * 200;
+        }
+    },
+    {
+        name: "Freestyle Mega Park",
+        sky: "#fdba74",
+        ground: "#475569",
+        topSoil: "#94a3b8",
+        // Rampes abruptes pour les figures aériennes
+        getY: (x) => {
+            if (x < 400) return 500;
+            let t = x - 400;
+            let cycle = t % 1600;
+            if (cycle > 300 && cycle < 650) {
+                // Rampe d'appel
+                return 500 - Math.pow((cycle - 300) / 350, 2) * 240;
+            } else if (cycle >= 650 && cycle < 1050) {
+                // Fosse (vide)
+                return 650;
+            } else if (cycle >= 1050 && cycle < 1450) {
+                // Réception
+                return 500 - Math.pow((1450 - cycle) / 400, 1.5) * 220;
+            }
+            return 500;
+        }
+    }
+];
+
+function selectMap(index) {
+    currentMap = index;
+    document.querySelectorAll('.map-buttons button').forEach((btn, i) => {
+        btn.className = (i === index) ? 'active' : '';
+    });
+    resetBike();
+}
+
+// --- PHYSIQUE DE LA MOTO ---
+let bike = {};
+let particles = [];
+let trickScore = 0;
+let airRotation = 0;
+
+function resetBike() {
+    bike = {
+        x: 200,
+        y: 380,
+        vx: 0,
+        vy: 0,
+        angle: 0,
+        va: 0,
+        wheelBase: 76,   // Empattement
+        wheelRadius: 22, // Taille des pneus
+        crashed: false,
+        rearWheel: { x: 0, y: 0, grounded: false, comp: 0 },
+        frontWheel: { x: 0, y: 0, grounded: false, comp: 0 }
+    };
+    particles = [];
+    airRotation = 0;
+    document.getElementById('crash-msg').style.display = 'none';
+}
+
+function updateWheels() {
+    const cos = Math.cos(bike.angle);
+    const sin = Math.sin(bike.angle);
+    const halfBase = bike.wheelBase / 2;
+    const suspOffset = 22; // Hauteur de la suspension au repos
+
+    bike.rearWheel.x = bike.x - cos * halfBase - sin * suspOffset;
+    bike.rearWheel.y = bike.y - sin * halfBase + cos * suspOffset;
+
+    bike.frontWheel.x = bike.x + cos * halfBase - sin * suspOffset;
+    bike.frontWheel.y = bike.y + sin * halfBase + cos * suspOffset;
+}
+
+function createDirtParticle(x, y, vx, vy) {
+    particles.push({
+        x: x,
+        y: y,
+        vx: vx + (Math.random() - 0.5) * 3,
+        vy: vy - Math.random() * 4,
+        size: Math.random() * 5 + 2,
+        life: 1.0
+    });
+}
+
+function updatePhysics() {
+    if (bike.crashed) return;
+
+    const gravity = 0.42;
+    bike.vy += gravity;
+
+    // Intégration de la vélocité
+    bike.x += bike.vx;
+    bike.y += bike.vy;
+    bike.angle += bike.va;
+
+    // Amortissement naturel
+    bike.vx *= 0.996;
+    bike.vy *= 0.996;
+    bike.va *= 0.92;
+
+    updateWheels();
+
+    const map = maps[currentMap];
+
+    // --- COLLISION ET SUSPENSION DES 2 ROUES ---
+    bike.rearWheel.grounded = false;
+    bike.frontWheel.grounded = false;
+
+    // 1. Roue Arrière (Motrice)
+    let groundRear = map.getY(bike.rearWheel.x);
+    let penRear = (bike.rearWheel.y + bike.wheelRadius) - groundRear;
+    if (penRear > 0) {
+        bike.rearWheel.grounded = true;
+        bike.rearWheel.comp = Math.min(penRear, 15);
+        
+        // Force de ressort de la suspension
+        let springForce = penRear * 0.35;
+        bike.vy -= springForce * 0.7;
+        bike.va += springForce * 0.0045; // Fait plonger l'avant si l'arrière tape fort
+
+        // Pente du terrain sous la roue arrière
+        let slope = (map.getY(bike.rearWheel.x + 5) - groundRear) / 5;
+        
+        // Accélération et projection de terre (Roost)
+        if (keys.up) {
+            bike.vx += Math.cos(Math.atan(slope)) * 0.48;
+            bike.vy += Math.sin(Math.atan(slope)) * 0.48;
+            if (Math.random() < 0.7) {
+                createDirtParticle(bike.rearWheel.x, groundRear, -bike.vx * 0.6, -2);
+            }
+        }
+        if (keys.down) {
+            bike.vx *= 0.92; // Frein arrière
+        }
+    } else {
+        bike.rearWheel.comp = 0;
+    }
+
+    // 2. Roue Avant (Directrice / Freinage fort)
+    let groundFront = map.getY(bike.frontWheel.x);
+    let penFront = (bike.frontWheel.y + bike.wheelRadius) - groundFront;
+    if (penFront > 0) {
+        bike.frontWheel.grounded = true;
+        bike.frontWheel.comp = Math.min(penFront, 15);
+        
+        let springForce = penFront * 0.35;
+        bike.vy -= springForce * 0.7;
+        bike.va -= springForce * 0.0045; // Redresse la moto quand l'avant touche
+
+        if (keys.down) {
+            bike.vx -= 0.15; // Marche arrière / frein avant
+        }
+    } else {
+        bike.frontWheel.comp = 0;
+    }
+
+    // Empêcher la moto de s'enfoncer sous terre lors des gros impacts
+    if (penRear > 18) bike.y -= (penRear - 18) * 0.5;
+    if (penFront > 18) bike.y -= (penFront - 18) * 0.5;
+
+    // --- TRANSFERT DE POIDS PILOTE (Air & Sol) ---
+    const pitchPower = (bike.rearWheel.grounded || bike.frontWheel.grounded) ? 0.0055 : 0.0075;
+    if (keys.left) {
+        bike.va -= pitchPower; // Tire sur le guidon (Wheelie / Backflip)
+    }
+    if (keys.right) {
+        bike.va += pitchPower; // Pousse sur le guidon (Stoppie / Frontflip)
+    }
+
+    // Calcul des figures (Backflip / Frontflip) en l'air
+    if (!bike.rearWheel.grounded && !bike.frontWheel.grounded) {
+        airRotation += bike.va;
+        if (Math.abs(airRotation) >= Math.PI * 1.8) {
+            trickScore += 100;
+            airRotation = 0;
+            document.getElementById('tricks').innerText = trickScore;
+        }
+    } else {
+        airRotation = 0;
+    }
+
+    // --- DÉTECTION DE CHUTE (Tête du pilote qui touche le sol) ---
+    const headX = bike.x + Math.sin(bike.angle) * 35;
+    const headY = bike.y - Math.cos(bike.angle) * 35;
+    if (headY >= map.getY(headX) - 8) {
+        bike.crashed = true;
+        document.getElementById('crash-msg').style.display = 'block';
+    }
+
+    // Mise à jour des particules de terre
+    for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.25;
+        p.life -= 0.03;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Mise à jour de l'UI Vitesse
+    let speedKmh = Math.round(Math.hypot(bike.vx, bike.vy) * 6);
+    document.getElementById('speed').innerText = speedKmh;
+}
+
+// --- RENDU GRAPHIQUE ---
+function draw() {
+    const map = maps[currentMap];
+    
+    // Fond du ciel
+    ctx.fillStyle = map.sky;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    // Caméra dynamique qui suit la moto avec un léger décalage vers l'avant
+    const camX = bike.x - canvas.width * 0.3 + bike.vx * 8;
+    const camY = bike.y - canvas.height * 0.55;
+    ctx.translate(-camX, -camY);
+
+    // 1. Dessiner le Terrain
+    ctx.beginPath();
+    const startX = Math.floor(camX / 10) * 10 - 50;
+    const endX = startX + canvas.width + 150;
+    ctx.moveTo(startX, camY + canvas.height + 200);
+    for (let x = startX; x <= endX; x += 10) {
+        ctx.lineTo(x, map.getY(x));
+    }
+    ctx.lineTo(endX, camY + canvas.height + 200);
+    ctx.closePath();
+    ctx.fillStyle = map.ground;
+    ctx.fill();
+
+    // Couche supérieure de terre/herbe
+    ctx.beginPath();
+    for (let x = startX; x <= endX; x += 10) {
+        if (x === startX) ctx.moveTo(x, map.getY(x));
+        else ctx.lineTo(x, map.getY(x));
+    }
+    ctx.strokeStyle = map.topSoil;
+    ctx.lineWidth = 10;
+    ctx.stroke();
+
+    // 2. Dessiner les particules de terre (Roost)
+    for (let p of particles) {
+        ctx.fillStyle = map.topSoil;
+        ctx.globalAlpha = p.life;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+
+    // 3. Dessiner les Roues
+    drawWheel(bike.rearWheel.x, bike.rearWheel.y - bike.rearWheel.comp * 0.4, bike.wheelRadius);
+    drawWheel(bike.frontWheel.x, bike.frontWheel.y - bike.frontWheel.comp * 0.4, bike.wheelRadius);
+
+    // 4. Dessiner le Châssis de la Moto et le Pilote
+    ctx.save();
+    ctx.translate(bike.x, bike.y);
+    ctx.rotate(bike.angle);
+
+    // Bras oscillant arrière & Fourche avant (Suspensions)
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(-10, 5);
+    ctx.lineTo(-bike.wheelBase / 2, 22 - bike.rearWheel.comp * 0.4); // Bras oscillant
+    ctx.moveTo(15, -15);
+    ctx.lineTo(bike.wheelBase / 2, 22 - bike.frontWheel.comp * 0.4); // Fourche inversée dorée
+    ctx.stroke();
+
+    // Cadre et Carénages (Style KTM / GasGas)
+    ctx.fillStyle = "#ff5722";
+    ctx.beginPath();
+    ctx.moveTo(-38, -8); // Garde-boue arrière
+    ctx.lineTo(22, -16); // Réservoir / Ouïes
+    ctx.lineTo(42, -12); // Garde-boue avant
+    ctx.lineTo(15, 6);   // Sabot moteur
+    ctx.lineTo(-15, 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bloc Moteur
+    ctx.fillStyle = "#475569";
+    ctx.fillRect(-10, -6, 20, 14);
+
+    // Pilote (Position dynamique selon les touches Gauche/Droite)
+    let leanOffset = keys.left ? -10 : (keys.right ? 10 : 0);
+    
+    // Jambes & Bottes
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(-5, 8); // Repose-pieds
+    ctx.lineTo(-12 + leanOffset * 0.4, -12); // Genou
+    ctx.lineTo(-16 + leanOffset * 0.6, -28); // Bassin
+    ctx.stroke();
+
+    // Buste (Maillot)
+    ctx.strokeStyle = "#e11d48";
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.moveTo(-16 + leanOffset * 0.6, -28);
+    ctx.lineTo(4 + leanOffset, -44); // Épaules
+    ctx.stroke();
+
+    // Bras vers le guidon
+    ctx.strokeStyle = "#e11d48";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(4 + leanOffset, -44);
+    ctx.lineTo(18, -20); // Guidon
+    ctx.stroke();
+
+    // Casque Cross
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.arc(6 + leanOffset, -54, 10, 0, Math.PI * 2);
+    ctx.fill();
+    // Visière du casque
+    ctx.fillStyle = "#1e293b";
+    ctx.fillRect(10 + leanOffset, -58, 10, 4);
+
+    ctx.restore();
+    ctx.restore();
+}
+
+function drawWheel(x, y, radius) {
+    // Pneu à crampons
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#171717";
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#0a0a0a";
+    ctx.stroke();
+
+    // Jante aluminium
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.6, 0, Math.PI * 2);
+    ctx.strokeStyle = "#d4d4d8";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Moyeu central
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff5722";
+    ctx.fill();
+}
+
+// --- BOUCLE PRINCIPALE ---
+function loop() {
+    updatePhysics();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+resetBike();
+loop();
+</script>
+</body>
+</html>
